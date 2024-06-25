@@ -1,0 +1,187 @@
+###### scripts usados para solução do trabalho final PUC ######
+############    DISCIPLINA BANCO DE DADOS    ###########
+
+# PROCEDIMENTOS:
+
+# 1) criação da base de dados de exemplo em formato json através de linguagem python
+
+import json
+import numpy as np
+import random
+
+# Parâmetros de geração de dados
+num_records = 10000  # Número máximo de registros
+cities = ['CityA', 'CityB', 'CityC', 'CityD', 'CityE']
+categories = ['Beverages', 'Bread/Bakery', 'Canned/Jarred Goods', 'Dairy', 'Frozen Goods', 'Meat', 'Produce', 'Cleaners', 'Paper Goods', 'Personal Care']
+
+# Funções para gerar dados
+def generate_product_name():
+    adjectives = ['Fresh', 'Quality', 'Organic', 'Gourmet', 'Premium']
+    nouns = ['Juice', 'Bread', 'Soup', 'Cheese', 'Chicken', 'Apples', 'Detergent', 'Napkins', 'Shampoo']
+    return f"{random.choice(adjectives)} {random.choice(nouns)}"
+
+def generate_data(num_records):
+    data = []
+    for i in range(1, num_records + 1):
+        product = {
+            'ProductID': i,
+            'ProductName': generate_product_name(),
+            'Category': random.choice(categories),
+            'Quantity': np.random.randint(1, 100),
+            'Price': round(np.random.uniform(1.0, 100.0), 2),
+            'City': random.choice(cities)
+        }
+        data.append(product)
+    return data
+
+# Gerar os dados
+data = generate_data(num_records)
+
+# Salvar em JSON
+json_output_path = "C:\\PUC\\Softwares\\Python\\dados_origem\\trabalho_final_bd.json"
+with open(json_output_path, 'w') as json_file:
+    json.dump(data, json_file, indent=4)
+
+print(f"Arquivo JSON salvo em: {json_output_path}")
+
+
+# 2) Criação da rede para a comunicação entre os containers
+
+docker network create mongo-cluster
+
+# 3) Criação dos containers ConfigServers
+ 
+docker run --name mongo-configl --net mongo-cluster -d mongo mongod --configsvr --replset config-servers --port 270172
+
+docker run --name mongo-config2 --net mongo-cluster -d mongo mongod --configsvr --replset config-servers --port 270172
+
+docker run --name mongo-config3 --net mongo-cluster -d mongo mongod --configsvr --replset config-servers --port 270172
+
+
+# 4) Inicialização da operação dos servidores de configuração:
+
+rs.initiate({_id: "config-servers",configsvr: true,version: l,members:[{_id: 0, host:"mongo-config-l:27017"},
+{_id： 1, host:"mongo-config-2:27017"},{_id: 2, host:"mongo-config-3:27017"}]})
+
+# 5) Criação dos Shards em que cada um possui um réplica:
+
+#Shard-1
+docker run --name mongo-shard-l-a --net mongo-cluster -d mongo mongod --shardsvr --replSet shards-1 --port 27017
+docker run --name mongo-shard-1-b --net mongo-cluster -d mongo mongod --shardsvr --replSet shards-1 --port 27017
+
+#Shard-2
+docker run --name mongo-shard-2-a --net mongo-cluster -d mongo mongod --shardsvr --replSet shards-2 --port 27017
+docker run --name mongo-shard-2-b --net mongo-cluster -d mongo mongod --shardsvr --replSet shards-2 --port 27017
+
+#Shard-3
+docker run --name mongo-shard-3-a --net mongo-cluster -d mongo mongod --shardsvr --replSet shards-3 --port 27017
+docker run --name mongo-shard-3-b --net mongo-cluster -d mongo mongod --shardsvr --replSet shards-3 --port 27017
+
+
+# 6)  Inicialização do serviço de roteamento:
+
+docker run -p 27017:27017 --name mongo-router --net mongo-cluster -d mongo mongos --configdb config-servers/mongo-config-1:27017,mongo-config-2:27017,mongo-config-3:27017 --port 27017 --bind_ip_all
+
+# 7)  Configuração do roteador para reconhecimento dos shards:
+
+docker exec -it mongo-router mongosh
+
+sh.addShard("shards-1/mongo-shard-1-a:27017")
+sh.addShard("shards-1/mongo-shard-1-b:27017")
+
+sh.addShard("shards-2/mongo-shard-1-a:27017")
+sh.addShard("shards-2/mongo-shard-1-b:27017")
+
+sh.addShard("shards-3/mongo-shard-1-a:27017")
+sh.addShard("shards-3/mongo-shard-1-b:27017")
+
+# 8) Verificação de funcionamento do cluster:
+
+sh.status()
+
+##### CENARIOS DE TESTES ######
+
+# 1) Consulta de documentos:
+
+db.supermercado.find({ "City": "New York" }).pretty()
+
+# 2) Contagem de documentos:
+
+db.supermercado.find({ "City": "New York" }).count()
+
+# 3) Atualização de documentos: (quantidade atualizada de 100 para 320)
+
+db.supermercado.updateOne({ "City": "New York", "Product": "Apple" },{ $set: { "Quantity": 320 } })
+
+# 4) Verificação de distribuição de dados:
+
+db.adminCommand({ balancerCollectionStatus: "trabalho_final_bd.supermercado" })
+
+# 5) Testes de perfomance (Medições de Tempo):
+
+# Inserção em massa:
+
+const bulkInsert = () => {
+    const start = new Date().getTime();
+    for (let i = 0; i < 10000; i++) {
+        db.supermercado.insertOne({
+            "City": ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix"][Math.floor(Math.random() * 5)],
+            "Product": ["Apple", "Banana", "Orange", "Grape", "Pear"][Math.floor(Math.random() * 5)],
+            "Quantity": Math.floor(Math.random() * 1000)
+        });
+    }
+    const end = new Date().getTime();
+    print("Bulk insert time: " + (end - start) + " ms");
+};
+
+bulkInsert();
+
+# Leitura simples:
+
+const simpleReadTest = () => {
+    const start = new Date().getTime();
+    db.supermercado.find({ "City": "New York" }).count();
+    const end = new Date().getTime();
+    print("Simple read time: " + (end - start) + " ms");
+};
+
+simpleReadTest();
+
+# Leitura Robusta:
+
+const complexReadTest = () => {
+    const start = new Date().getTime();
+    db.supermercado.aggregate([
+        { $match: { "City": "New York" } },
+        { $group: { _id: "$Product", totalQuantity: { $sum: "$Quantity" } } }
+    ]).toArray();
+    const end = new Date().getTime();
+    print("Complex read time: " + (end - start) + " ms");
+};
+
+complexReadTest();
+
+# Atualização:
+
+const updateTest = () => {
+    const start = new Date().getTime();
+    db.supermercado.updateMany(
+        { "City": "New York" },
+        { $set: { "Quantity": 500 } }
+    );
+    const end = new Date().getTime();
+    print("Update time: " + (end - start) + " ms");
+};
+
+updateTest();
+
+# Delete:
+
+const deleteTest = () => {
+    const start = new Date().getTime();
+    db.supermercado.deleteMany({ "City": "New York" });
+    const end = new Date().getTime();
+    print("Delete time: " + (end - start) + " ms");
+};
+
+deleteTest();
